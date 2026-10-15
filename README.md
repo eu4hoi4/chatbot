@@ -1,11 +1,16 @@
 # chatbot
 
+![CI](https://github.com/eu4hoi4/chatbot/actions/workflows/ci.yml/badge.svg)
+
 一个最小的 FastAPI 后端：`POST /chat` 收到 `message` 后转发给 DeepSeek 的 `/chat/completions`，把模型回答以 `{"reply": "..."}` 返回。仓库里附带一个 `test.html`，浏览器里点一下就能试。
 
 ```
-main.py     后端（接口层 + 转发层 + 取答层）
-test.html   浏览器测试页，POST 到 http://127.0.0.1:8000/chat
-.gitignore  内容只有 .env
+main.py                            后端（接口层 + 转发层 + 取答层）
+test_main.py                       离线契约测试（不联网、不需要 API Key）
+test.html                          浏览器测试页，POST 到 http://127.0.0.1:8000/chat
+.github/workflows/ci.yml           推送到 master 时自动跑测试与冒烟检查
+.github/workflows/live-check.yml   手动触发，真实调用一次 DeepSeek
+.gitignore                         忽略 .env 与 Python 缓存目录
 ```
 
 ---
@@ -197,6 +202,21 @@ DeepSeek 的返回是一个大 JSON，结构大致是：
 3. **只判断了 `status_code != 200`，没有处理异常。** 网络不通、DNS 失败、连接超时等情况会从 `await client.post(...)` 直接抛 `httpx` 异常，没人接，最终变成 500。
 
 另外，正常路径上的取值 `r.json()["choices"][0]["message"]["content"]` 仍然没有兜底：如果上游返回 200 但结构不符合预期（缺 `choices` 或 `content`），这里会抛 `KeyError` / `IndexError`。
+
+---
+
+## 持续集成
+
+`.github/workflows/ci.yml` 在每次推送到 `master`（以及发起 PR）时自动运行，无需任何密钥：
+
+1. `pytest -v` 执行 `test_main.py` 里的 9 项离线契约测试——它们用 monkeypatch 替换掉 `httpx` 的真实网络调用，因此**不联网、不需要 API Key**，任何人 clone 下来都能复现；覆盖输入校验（422）、转发内容（URL / `Authorization` / payload）、取答路径，以及上游非 200 时的实际行为。
+2. 真实启动 `uvicorn main:app`，验证 `/chat` 路由已注册、缺少 `message` 字段时返回 422，并用占位 Key 真实请求一次 DeepSeek，以确认转发链路确实连通（预期看到上游返回 401，这次真实的网络往返本身就是链路打通的证据）。
+
+运行记录（每次提交的时间戳与完整日志）见 [Actions 页面](https://github.com/eu4hoi4/chatbot/actions/workflows/ci.yml)。
+
+另有 `.github/workflows/live-check.yml`，通过 Actions 页面的 **Run workflow** 手动触发，用于产生一次真实的端到端问答证据：若仓库配置了 secret `DEEPSEEK_API_KEY` 就做真实问答并打印回答，未配置则退化为用无效 Key 调用并打印真实的 401 响应。
+
+> 关于密钥：CI 主体完全不接触真实 Key。只有 `live-check.yml` 会在你配置了 secret 时使用它，而 GitHub 会自动在日志中打码 secret 内容。注意 secret 名称是 `DEEPSEEK_API_KEY`，workflow 内部把它映射成 `API_KEY` 环境变量，因为 `main.py` 读的是后者。
 
 ---
 

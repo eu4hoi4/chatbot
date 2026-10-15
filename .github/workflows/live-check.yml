@@ -1,0 +1,68 @@
+name: Live Check（手动触发）
+
+# 手动触发路径：仓库 Actions 页面 -> 左侧选 "Live Check" -> Run workflow
+#
+# 用途：产生一次真实的端到端调用证据，可直接把运行记录链接作为证据提交。
+#
+# - 若仓库已配置 secret `DEEPSEEK_API_KEY`，会用它做一次真实问答并打印回答。
+# - 若未配置，则退化为用无效 Key 调用，打印真实的 401 响应——这同样证明了
+#   转发链路（URL、headers、payload）是通的，且不需要任何密钥。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: 真实调用 DeepSeek
+    runs-on: ubuntu-latest
+
+    env:
+      # main.py 读的是 API_KEY，这里把 secret 映射过去
+      API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn httpx python-dotenv
+
+      - name: 真实调用一次
+        run: |
+          if [ -z "$API_KEY" ]; then
+            echo "未检测到 DEEPSEEK_API_KEY，改用无效 Key 验证链路连通性。"
+            export API_KEY="sk-no-secret-configured"
+          else
+            echo "已检测到 DEEPSEEK_API_KEY，将进行真实问答。"
+          fi
+
+          uvicorn main:app --port 8000 --log-level warning &
+          SERVER_PID=$!
+
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8000/openapi.json; then break; fi
+            sleep 1
+          done
+
+          echo
+          echo "=== 请求体 ==="
+          echo '{"message":"你好，请用一句话介绍你自己"}'
+
+          echo
+          echo "=== 响应体 ==="
+          curl -s -m 60 -X POST http://127.0.0.1:8000/chat \
+            -H "Content-Type: application/json" \
+            -d '{"message":"你好，请用一句话介绍你自己"}'
+          echo
+
+          kill $SERVER_PID

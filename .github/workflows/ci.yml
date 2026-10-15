@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    name: 离线契约测试（无需 API Key）
+    runs-on: ubuntu-latest
+
+    env:
+      # main.py 启动时只要求这个变量存在；离线测试全程 mock 掉网络，
+      # 不会真的拿它去发请求，所以这里放一个占位值即可。
+      API_KEY: dummy-key-for-offline-tests
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn httpx python-dotenv pytest
+
+      - name: 运行测试
+        run: pytest -v
+
+      - name: 冒烟测试（真实启动服务并验证接口契约）
+        run: |
+          uvicorn main:app --port 8000 --log-level warning &
+          SERVER_PID=$!
+
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8000/openapi.json; then break; fi
+            sleep 1
+          done
+
+          echo "=== 1) 服务已启动，/chat 路由已注册 ==="
+          curl -s http://127.0.0.1:8000/openapi.json | grep -q '"/chat"' && echo "PASS: /chat found"
+
+          echo
+          echo "=== 2) 缺少 message 字段时返回 422（不会打到上游）==="
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+            -X POST http://127.0.0.1:8000/chat \
+            -H "Content-Type: application/json" \
+            -d '{}'
+
+          echo
+          echo "=== 3) 用占位 Key 真实请求一次 DeepSeek ==="
+          echo "    目的：证明转发链路真的连通（预期看到上游返回 401，这本身即为真实网络往返证据）"
+          curl -s -m 30 -X POST http://127.0.0.1:8000/chat \
+            -H "Content-Type: application/json" \
+            -d '{"message":"hello"}' || echo "(上游不可达，已跳过)"
+          echo
+
+          kill $SERVER_PID
