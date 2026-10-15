@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>最简单的聊天请求</title>
+</head>
+<body>
+    <input type="text" id="msg" value="hi">
+    <button id="btn">发送</button>
+    <p id="result"></p>
+
+    <script>
+        document.getElementById('btn').onclick = function() {
+            var message = document.getElementById('msg').value;
+
+            fetch('http://127.0.0.1:8000/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: message })
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                document.getElementById('result').innerText = JSON.stringify(data);
+            })
+            .catch(function(err) {
+                document.getElementById('result').innerText = '出错: ' + err;
+            });
+        };
+    </script>
+</body>
+</html>
